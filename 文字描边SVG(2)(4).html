@@ -1,0 +1,1523 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>文字多层描边 SVG 工具</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+  * { box-sizing: border-box; }
+  body { font-family: 'Inter', 'Microsoft YaHei', sans-serif; }
+  .preview-bg {
+    background-image:
+      linear-gradient(45deg, #e5e7eb 25%, transparent 25%),
+      linear-gradient(-45deg, #e5e7eb 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #e5e7eb 75%),
+      linear-gradient(-45deg, transparent 75%, #e5e7eb 75%);
+    background-size: 20px 20px;
+    background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+  }
+  input[type="range"] {
+    -webkit-appearance: none; height: 6px; background: #e5e7eb; border-radius: 3px; outline: none; cursor: pointer;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 18px; height: 18px; background: #3b82f6; border-radius: 50%;
+    cursor: pointer; border: 2px solid white; box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+  }
+  .color-swatch {
+    width: 28px; height: 28px; border-radius: 50%; cursor: pointer; border: 2px solid transparent;
+    transition: all 0.15s; flex-shrink: 0;
+  }
+  .color-swatch:hover { transform: scale(1.15); }
+  .color-swatch.active { border-color: #1f2937; box-shadow: 0 0 0 2px white, 0 0 0 4px #1f2937; }
+  .color-swatch.white { border-color: #d1d5db; }
+  .color-swatch.white.active { border-color: #1f2937; box-shadow: 0 0 0 2px white, 0 0 0 4px #1f2937; }
+  .layer-card {
+    background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 10px; transition: all 0.2s;
+  }
+  .layer-card:hover { border-color: #d1d5db; }
+  .layer-card.dragging { opacity: 0.4; }
+  .layer-card.drag-over { border-color: #3b82f6; border-style: dashed; background: #eff6ff; }
+  .scrollbar-thin::-webkit-scrollbar { width: 4px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 2px; }
+  .btn { transition: all 0.15s; cursor: pointer; user-select: none; }
+  .btn:active { transform: scale(0.97); }
+  textarea:focus, select:focus, input:focus { outline: none; }
+  .zoom-indicator {
+    background: rgba(255,255,255,0.9); backdrop-filter: blur(8px); border: 1px solid #e5e7eb;
+  }
+  .spin-input::-webkit-inner-spin-button,
+  .spin-input::-webkit-outer-spin-button { opacity: 1; height: 28px; }
+  .drag-handle { cursor: grab; touch-action: none; }
+  .drag-handle:active { cursor: grabbing; }
+  #loadingOverlay { display: none; }
+  #loadingOverlay.show { display: flex; }
+</style>
+</head>
+<body class="bg-white h-screen overflow-hidden flex">
+
+<!-- 加载遮罩 -->
+<div id="loadingOverlay" class="fixed inset-0 bg-black/30 z-50 items-center justify-center">
+  <div class="bg-white rounded-xl px-6 py-4 shadow-xl flex items-center gap-3">
+    <i class="fa fa-spinner fa-spin text-blue-500 text-lg"></i>
+    <span class="text-sm text-gray-700">正在生成 SVG...</span>
+  </div>
+</div>
+
+<!-- ==================== 左侧工具栏 ==================== -->
+<div class="h-full border-r border-gray-200 flex flex-col bg-gray-50 flex-shrink-0" id="sidebar" style="width:400px;min-width:260px;max-width:800px">
+  <div class="px-5 py-4 border-b border-gray-200 bg-white">
+    <h1 class="text-lg font-bold text-gray-800 tracking-tight">
+      文字多层描边
+    </h1>
+  </div>
+  <div class="flex-1 overflow-y-auto scrollbar-thin px-5 py-4 space-y-5">
+
+    <!-- 文字输入 -->
+    <div>
+      <label class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 block">输入文字</label>
+      <textarea id="textInput" rows="2"
+        class="w-full border border-gray-300 rounded-lg px-3 py-2 text-gray-700 text-sm resize-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+        placeholder="输入要描边的文字...">文字描边</textarea>
+    </div>
+
+    <!-- 字体设置 -->
+    <div>
+      <label class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 block">字体</label>
+      <div class="relative" id="fontCombobox">
+        <input type="text" id="fontComboboxInput" autocomplete="off" placeholder="搜索或选择字体..."
+          class="w-full border border-gray-300 rounded-lg px-3 py-2 pr-8 text-sm text-gray-700 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white cursor-pointer">
+        <i class="fa fa-chevron-down absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none text-xs"></i>
+        <div id="fontComboboxDropdown" class="absolute left-0 right-0 top-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg z-50 max-h-[60vh] overflow-y-auto hidden scrollbar-thin">
+        </div>
+      </div>
+      <select id="fontFamily" class="hidden">
+        <option value="Microsoft YaHei">微软雅黑</option>
+        <option value="SimHei">黑体</option>
+        <option value="SimSun">宋体</option>
+        <option value="KaiTi">楷体</option>
+        <option value="FangSong">仿宋</option>
+        <option value="DengXian">等线</option>
+        <option value="STXihei">华文细黑</option>
+        <option value="STKaiti">华文楷体</option>
+        <option value="STSong">华文宋体</option>
+        <option value="PingFang SC">苹方</option>
+        <option value="Source Han Sans SC">思源黑体</option>
+        <option value="Source Han Serif SC">思源宋体</option>
+        <option value="Arial">Arial</option>
+        <option value="Inter">Inter</option>
+      </select>
+      <button id="loadLocalFonts" class="mt-1.5 text-xs text-blue-500 hover:text-blue-700 btn">
+        <i class="fa fa-refresh mr-1"></i>检测本机字体
+      </button>
+    </div>
+
+    <!-- 文字填充色 -->
+    <div>
+      <div class="flex items-center justify-between mb-2">
+        <label class="text-xs font-semibold text-gray-500 uppercase tracking-wider">文字填充色</label>
+        <button id="toggleFillVis" class="btn w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-blue-500"
+          title="显示/隐藏填充层">
+          <i class="fa fa-eye text-[10px]"></i></button>
+      </div>
+      <div class="flex items-center gap-1.5 flex-wrap" id="fillColorPicker">
+        <div class="color-swatch active" style="background:#1f2937" data-fill-color="#1f2937" title="深灰"></div>
+        <div class="color-swatch" style="background:#EF4444" data-fill-color="#EF4444" title="红"></div>
+        <div class="color-swatch" style="background:#EAB308" data-fill-color="#EAB308" title="黄"></div>
+        <div class="color-swatch" style="background:#3B82F6" data-fill-color="#3B82F6" title="蓝"></div>
+        <div class="color-swatch white" style="background:#FFFFFF" data-fill-color="#FFFFFF" title="白"></div>
+        <div class="color-swatch" style="background:#8B5CF6" data-fill-color="#8B5CF6" title="紫"></div>
+        <div class="color-swatch" style="background:#22C55E" data-fill-color="#22C55E" title="绿"></div>
+        <input type="color" id="fillColor" value="#1f2937" class="w-7 h-7 rounded cursor-pointer border p-0 ml-1" title="自定义颜色">
+      </div>
+    </div>
+
+    <!-- 字号设置 -->
+    <div>
+      <label class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 block">字号</label>
+      <div class="flex items-center gap-2 mb-1">
+        <button id="fontSizeDown" class="btn w-7 h-7 flex items-center justify-center rounded-md bg-white border border-gray-200 hover:bg-gray-100 text-gray-500 text-sm">−</button>
+        <input type="number" id="fontSizeNum" value="120" min="10" max="300" step="1"
+          class="spin-input w-16 text-center border border-gray-300 rounded-md py-1 text-sm font-mono text-gray-700 focus:ring-1 focus:ring-blue-400">
+        <button id="fontSizeUp" class="btn w-7 h-7 flex items-center justify-center rounded-md bg-white border border-gray-200 hover:bg-gray-100 text-gray-500 text-sm">+</button>
+        <span class="text-xs text-gray-400">px</span>
+      </div>
+      <input type="range" id="fontSize" min="10" max="300" value="120" class="w-full">
+      <div class="flex gap-1.5 mt-1">
+        <button class="fontSizePreset btn text-[10px] px-2 py-0.5 rounded border border-gray-200 bg-white text-gray-500 hover:bg-gray-100" data-size="40">40</button>
+        <button class="fontSizePreset btn text-[10px] px-2 py-0.5 rounded border border-gray-200 bg-white text-gray-500 hover:bg-gray-100" data-size="80">80</button>
+        <button class="fontSizePreset btn text-[10px] px-2 py-0.5 rounded border border-gray-200 bg-white text-gray-500 hover:bg-gray-100" data-size="120">120</button>
+        <button class="fontSizePreset btn text-[10px] px-2 py-0.5 rounded border border-gray-200 bg-white text-gray-500 hover:bg-gray-100" data-size="200">200</button>
+      </div>
+    </div>
+
+    <!-- 图层列表 -->
+    <div id="layerList" class="space-y-3"></div>
+
+    <!-- 添加图层按钮 — 紧挨最后一个图层下方 -->
+    <button id="addLayer" class="btn w-full mt-1 bg-blue-500 hover:bg-blue-600 text-white text-xs py-2 rounded-lg font-medium">
+      <i class="fa fa-plus mr-1"></i>添加描边图层
+    </button>
+
+  </div>
+</div>
+
+<!-- ==================== 拖拽调整宽度手柄 ==================== -->
+<div id="resizeHandle" class="w-1.5 cursor-col-resize bg-transparent hover:bg-blue-400/50 active:bg-blue-500 flex-shrink-0 transition-colors z-10" title="拖拽调整宽度"></div>
+
+<!-- ==================== 右侧预览区 ==================== -->
+<div class="flex-1 relative overflow-hidden preview-bg" id="previewContainer">
+  <div id="previewWrapper" class="absolute inset-0" style="transform:translate(0,0) scale(1);transform-origin:0 0;">
+    <svg id="previewSvg" xmlns="http://www.w3.org/2000/svg" class="block"></svg>
+  </div>
+
+  <!-- 右上角导出 -->
+  <div class="absolute top-4 right-4 z-10">
+    <button id="exportBtn" class="btn bg-gray-800 hover:bg-gray-900 text-white px-3 py-1.5 rounded-lg text-sm shadow-lg flex items-center gap-1.5">
+      <i class="fa fa-download"></i>导出 SVG
+    </button>
+  </div>
+
+  <!-- 缩放控件 -->
+  <div class="absolute bottom-4 right-4 zoom-indicator rounded-lg px-3 py-2 flex items-center gap-2 z-10">
+    <button id="zoomOut" class="btn w-7 h-7 flex items-center justify-center rounded-md hover:bg-gray-100 text-gray-600"><i class="fa fa-minus text-xs"></i></button>
+    <span id="zoomLevel" class="text-xs text-gray-700 font-mono w-12 text-center">100%</span>
+    <button id="zoomIn" class="btn w-7 h-7 flex items-center justify-center rounded-md hover:bg-gray-100 text-gray-600"><i class="fa fa-plus text-xs"></i></button>
+    <div class="w-px h-4 bg-gray-300 mx-1"></div>
+    <button id="zoomReset" class="btn text-xs text-gray-500 hover:text-gray-700 px-1">重置</button>
+    <button id="zoomFit" class="btn text-xs text-blue-500 hover:text-blue-700 px-1">适应</button>
+  </div>
+
+  <div id="hintText" class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-gray-300 text-sm pointer-events-none select-none">
+    <i class="fa fa-mouse-pointer mr-2"></i>滚轮缩放 · 拖拽平移
+  </div>
+</div>
+
+<script>
+// ======================== 常量 ========================
+const PRESET_COLORS = [
+  { name: '红', hex: '#EF4444' },
+  { name: '黄', hex: '#EAB308' },
+  { name: '蓝', hex: '#3B82F6' },
+  { name: '白', hex: '#FFFFFF' },
+  { name: '紫', hex: '#8B5CF6' },
+  { name: '绿', hex: '#22C55E' },
+];
+const STROKE_STYLES = [
+  { value: 'solid', label: '实线' },
+  { value: 'dashed', label: '虚线' },
+  { value: 'dotted', label: '点线' },
+  { value: 'double', label: '双线' },
+  { value: 'triple', label: '三线' },
+  { value: 'filled', label: '全覆盖' },
+  { value: 'dash-dot', label: '点划线' },
+  { value: 'dash-double-dot', label: '双点划线' },
+  { value: 'long-dash', label: '长虚线' },
+  { value: 'short-dash', label: '短虚线' },
+  { value: 'outline-dot', label: '外框点线' },
+  { value: 'stripe', label: '条纹虚线' },
+];
+
+// 常见中文字体的英文名→中文名映射
+const CHINESE_FONT_NAMES = {
+  'Microsoft YaHei': '微软雅黑',
+  'Microsoft YaHei UI': '微软雅黑',
+  'SimHei': '黑体',
+  'SimSun': '宋体',
+  'NSimSun': '新宋体',
+  'KaiTi': '楷体',
+  'FangSong': '仿宋',
+  'DengXian': '等线',
+  'STXihei': '华文细黑',
+  'STKaiti': '华文楷体',
+  'STSong': '华文宋体',
+  'STCaiyun': '华文彩云',
+  'STHupo': '华文琥珀',
+  'STLiti': '华文隶书',
+  'STXingkai': '华文行楷',
+  'STXinwei': '华文新魏',
+  'PingFang SC': '苹方',
+  'PingFang TC': '苹方',
+  'PingFang': '苹方',
+  'Source Han Sans SC': '思源黑体',
+  'Source Han Serif SC': '思源宋体',
+  'Noto Sans SC': '思源黑体',
+  'Noto Serif SC': '思源宋体',
+  'Ma Shan Zheng': '马善政毛笔楷书',
+  'ZCOOL QingKe HuangYou': '站酷庆科黄油体',
+  'ZCOOL KuaiLe': '站酷快乐体',
+  'ZCOOL XiaoWei': '站酷小薇体',
+};
+
+function getFontDisplayName(family, fullName) {
+  // 如果 fullName 包含中文字符，直接使用（如 "微软雅黑"、"楷体" 等）
+  if (fullName && /[一-鿿]/.test(fullName)) return fullName;
+  return CHINESE_FONT_NAMES[family] || family;
+}
+
+// ======================== 状态 ========================
+const state = {
+  text: '文字描边',
+  fontFamily: 'Microsoft YaHei',
+  fontSize: 120,
+  fillColor: '#1f2937',
+  fillVisible: true,
+  layers: [],
+  nextId: 1,
+  zoom: 1, panX: 0, panY: 0,
+  expandedColorPicker: null,
+};
+
+const undoStack = [];
+const MAX_UNDO = 50;
+
+function saveState() {
+  undoStack.push({
+    text: state.text,
+    fontFamily: state.fontFamily,
+    fontSize: state.fontSize,
+    fillColor: state.fillColor,
+    fillVisible: state.fillVisible,
+    layers: JSON.parse(JSON.stringify(state.layers)),
+    nextId: state.nextId,
+  });
+  if (undoStack.length > MAX_UNDO) undoStack.shift();
+}
+
+function undo() {
+  if (undoStack.length === 0) return;
+  const snap = undoStack.pop();
+  state.text = snap.text;
+  state.fontFamily = snap.fontFamily;
+  state.fontSize = snap.fontSize;
+  state.fillColor = snap.fillColor;
+  state.fillVisible = snap.fillVisible;
+  state.layers = snap.layers;
+  state.nextId = snap.nextId;
+  // 同步所有 UI
+  textInput.value = state.text;
+  setFillColor(state.fillColor);
+  updateFillVisButton();
+  fontSizeSlider.value = state.fontSize;
+  fontSizeNum.value = state.fontSize;
+  fontFamilySel.value = state.fontFamily;
+  syncFontOptions();
+  renderLayerList();
+  updatePreview();
+}// ======================== DOM 快捷引用 ========================
+const $ = (s) => document.querySelector(s);
+const textInput = $('#textInput');
+const fontFamilySel = $('#fontFamily');
+const fontComboboxInput = $('#fontComboboxInput');
+const fontComboboxDropdown = $('#fontComboboxDropdown');
+const fontSizeSlider = $('#fontSize');
+const fontSizeNum = $('#fontSizeNum');
+const fillColor = $('#fillColor');
+const layerList = $('#layerList');
+const previewSvg = $('#previewSvg');
+const previewWrapper = $('#previewWrapper');
+const previewContainer = $('#previewContainer');
+const hintText = $('#hintText');
+const zoomLevel = $('#zoomLevel');
+const loadingOverlay = $('#loadingOverlay');
+
+// ======================== 显示/隐藏加载 ========================
+function showLoading() { loadingOverlay.classList.add('show'); }
+function hideLoading() { loadingOverlay.classList.remove('show'); }
+
+// ======================== 本机字体检测（仅用于下拉列表） ========================
+let detectedFontsPromise = null;
+
+async function getDetectedFonts() {
+  if (detectedFontsPromise) return detectedFontsPromise;
+  if (typeof window.queryLocalFonts !== 'function') {
+    detectedFontsPromise = Promise.resolve([]);
+    return detectedFontsPromise;
+  }
+  detectedFontsPromise = window.queryLocalFonts()
+    .then(fonts => {
+      console.log('已检测本机字体:', fonts.length, '款');
+      return fonts;
+    })
+    .catch(e => {
+      console.warn('queryLocalFonts 失败:', e.message);
+      return [];
+    });
+  return detectedFontsPromise;
+}
+
+function getStrokeDashArray(style, width) {
+  switch (style) {
+    case 'dashed': return `${width * 4} ${width * 2}`;
+    case 'dotted': return `0 ${width * 2.5}`;
+    case 'dash-dot': return `${width * 4} ${width * 2} 0 ${width * 2.5}`;
+    case 'dash-double-dot': return `${width * 4} ${width * 1.5} 0 ${width * 1.5} 0 ${width * 1.5}`;
+    case 'long-dash': return `${width * 10} ${width * 3}`;
+    case 'short-dash': return `${width * 1.5} ${width * 1.5}`;
+    case 'outline-dot': return `0 ${width * 3.5}`;
+    case 'stripe': return `${width * 1} ${width * 3}`;
+    default: return null; // solid, double, triple, filled
+  }
+}
+
+function escXml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ======================== 预览 SVG（使用 text 元素，快速渲染） ========================
+function measureText() {
+  const c = document.createElement('canvas');
+  const ctx = c.getContext('2d');
+  ctx.font = `bold ${state.fontSize}px "${state.fontFamily}", sans-serif`;
+  const m = ctx.measureText(state.text || ' ');
+  return {
+    width: Math.max(m.width, 50),
+    height: state.fontSize * 1.4,
+  };
+}
+
+function generatePreviewSVG() {
+  const text = state.text || ' ';
+  const dims = measureText();
+  const pad = 160; // 固定 padding，避免图层粗细变化导致文字偏移
+  const vbW = dims.width + pad;
+  const vbH = dims.height + pad;
+  const cx = vbW / 2;
+  const cy = vbH / 2;
+
+  const sorted = [...state.layers].filter(l => l.visible).sort((a, b) => b.width - a.width);
+
+  const ROUND_STYLES = ['dotted', 'dash-dot', 'dash-double-dot', 'outline-dot'];
+
+  let strokes = '';
+  sorted.forEach(l => {
+    if (l.style === 'filled') {
+      // 全覆盖：fill + stroke 按宽度向外扩张
+      strokes += `
+  <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central"
+        fill="${l.color}" stroke="${l.color}" stroke-width="${l.width}" stroke-linejoin="round" stroke-linecap="round"
+        font-family="${state.fontFamily}" font-weight="bold" font-size="${state.fontSize}px">${escXml(text)}</text>`;
+      return;
+    }
+    if (l.style === 'triple') {
+      const ow = l.width;
+      const mw = Math.max(1, Math.round(l.width * 0.55));
+      const iw = Math.max(1, Math.round(l.width * 0.2));
+      strokes += `
+  <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central"
+        stroke="${l.color}" stroke-width="${ow}" fill="none" stroke-linejoin="round" stroke-linecap="round"
+        font-family="${state.fontFamily}" font-weight="bold" font-size="${state.fontSize}px">${escXml(text)}</text>
+  <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central"
+        stroke="${l.color}" stroke-width="${mw}" fill="none" stroke-linejoin="round" stroke-linecap="round"
+        font-family="${state.fontFamily}" font-weight="bold" font-size="${state.fontSize}px">${escXml(text)}</text>
+  <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central"
+        stroke="${l.color}" stroke-width="${iw}" fill="none" stroke-linejoin="round" stroke-linecap="round"
+        font-family="${state.fontFamily}" font-weight="bold" font-size="${state.fontSize}px">${escXml(text)}</text>`;
+      return;
+    }
+    const da = getStrokeDashArray(l.style, l.width);
+    const lc = ROUND_STYLES.includes(l.style) ? 'round' : 'butt';
+    if (l.style === 'double') {
+      const ow = l.width;
+      const iw = Math.max(1, Math.round(l.width * 0.25));
+      strokes += `
+  <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central"
+        stroke="${l.color}" stroke-width="${ow}" fill="none" stroke-linejoin="round" stroke-linecap="round"
+        font-family="${state.fontFamily}" font-weight="bold" font-size="${state.fontSize}px">${escXml(text)}</text>
+  <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central"
+        stroke="${l.color}" stroke-width="${iw}" fill="none" stroke-linejoin="round" stroke-linecap="round"
+        font-family="${state.fontFamily}" font-weight="bold" font-size="${state.fontSize}px">${escXml(text)}</text>`;
+    } else {
+      strokes += `
+  <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central"
+        stroke="${l.color}" stroke-width="${l.width}" fill="none" stroke-linejoin="round" stroke-linecap="${lc}"
+        ${da ? `stroke-dasharray="${da}"` : ''}
+        font-family="${state.fontFamily}" font-weight="bold" font-size="${state.fontSize}px">${escXml(text)}</text>`;
+    }
+  });
+
+  const fill = state.fillVisible ? `
+  <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central"
+        fill="${state.fillColor}"
+        font-family="${state.fontFamily}" font-weight="bold" font-size="${state.fontSize}px">${escXml(text)}</text>` : '';
+
+  return {
+    dims: { w: vbW, h: vbH },
+    inner: strokes + fill,
+  };
+}
+
+function updatePreview() {
+  const r = generatePreviewSVG();
+  previewSvg.innerHTML = r.inner;
+  previewSvg.setAttribute('viewBox', `0 0 ${r.dims.w} ${r.dims.h}`);
+  previewSvg.setAttribute('width', r.dims.w);
+  previewSvg.setAttribute('height', r.dims.h);
+  applyTransform();
+}
+
+function applyTransform() {
+  previewWrapper.style.transform = `translate(${state.panX}px,${state.panY}px) scale(${state.zoom})`;
+  previewWrapper.style.transformOrigin = '0 0';
+  zoomLevel.textContent = Math.round(state.zoom * 100) + '%';
+}
+
+// ======================== SVG 路径导出（像素追踪转矢量路径） ========================
+const TRACE_SCALE = 6;
+const TRACE_THRESHOLD = 30; // alpha > this means "inside" — 降低阈值以捕获更完整的字形边缘
+
+// 在 Canvas 上逐字渲染文字（描边或填充），防止字间像素粘连
+function renderTextToImageData(layerOrFill, sharedDims) {
+  const text = state.text || ' ';
+  const scaled = state.fontSize * TRACE_SCALE;
+  const font = `bold ${scaled}px "${state.fontFamily}", sans-serif`;
+
+  const mCanvas = document.createElement('canvas');
+  const mCtx = mCanvas.getContext('2d');
+  mCtx.font = font;
+  const metrics = mCtx.measureText(text);
+
+  let cw, ch, cx, cy;
+  if (sharedDims) {
+    cw = sharedDims.cw; ch = sharedDims.ch; cx = sharedDims.cx; cy = sharedDims.cy;
+  } else {
+    const tw = Math.max(metrics.width, 50);
+    const sw = (layerOrFill.width || 0) * TRACE_SCALE;
+    const pad = sw * 2 + 40;
+    cw = Math.ceil(tw + pad);
+    ch = Math.ceil(scaled * 1.6);
+    cx = cw / 2;
+    cy = ch / 2;
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = cw;
+  canvas.height = ch;
+  const ctx = canvas.getContext('2d');
+  ctx.font = font;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+
+  // 逐字渲染，确保每个字符独立
+  const chars = text.split('');
+  const widths = chars.map(c => Math.max(ctx.measureText(c).width, 1));
+  const totalW = widths.reduce((a, b) => a + b, 0);
+  const textStartX = (cw - totalW) / 2;
+
+  if (layerOrFill.fillOnly) {
+    ctx.fillStyle = '#000000';
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = Math.max(1, Math.round(TRACE_SCALE * 0.5));
+    ctx.lineJoin = 'round';
+    let xPos = textStartX;
+    chars.forEach((c, i) => {
+      ctx.fillText(c, xPos, cy);
+      ctx.strokeText(c, xPos, cy);
+      xPos += widths[i];
+    });
+  } else if (layerOrFill.style === 'filled') {
+    // 全覆盖：fillText 填满内部 + stroke 按宽度向外扩张
+    ctx.fillStyle = '#000000';
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = Math.max(1, Math.round(layerOrFill.width * TRACE_SCALE));
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    let xPos = textStartX;
+    chars.forEach((c, i) => {
+      ctx.fillText(c, xPos, cy);
+      ctx.strokeText(c, xPos, cy);
+      xPos += widths[i];
+    });
+  } else if (layerOrFill.style === 'triple') {
+    ctx.strokeStyle = '#000000';
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.setLineDash([]);
+    // 三线：从外到内三次描边
+    [layerOrFill.width * TRACE_SCALE,
+     Math.max(1, Math.round(layerOrFill.width * TRACE_SCALE * 0.55)),
+     Math.max(1, Math.round(layerOrFill.width * TRACE_SCALE * 0.2))].forEach(w => {
+      ctx.lineWidth = w;
+      let xPos = textStartX;
+      chars.forEach((c, i) => {
+        ctx.strokeText(c, xPos, cy);
+        xPos += widths[i];
+      });
+    });
+  } else if (layerOrFill.style === 'double') {
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = layerOrFill.width * TRACE_SCALE;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.setLineDash([]);
+    let xPos = textStartX;
+    chars.forEach((c, i) => {
+      ctx.strokeText(c, xPos, cy);
+      xPos += widths[i];
+    });
+    ctx.lineWidth = Math.max(1, Math.round(layerOrFill.width * TRACE_SCALE * 0.25));
+    xPos = textStartX;
+    chars.forEach((c, i) => {
+      ctx.strokeText(c, xPos, cy);
+      xPos += widths[i];
+    });
+  } else {
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = layerOrFill.width * TRACE_SCALE;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = ['dotted', 'dash-dot', 'dash-double-dot', 'outline-dot'].includes(layerOrFill.style) ? 'round' : 'butt';
+    switch (layerOrFill.style) {
+      case 'dashed':
+        ctx.setLineDash([layerOrFill.width * TRACE_SCALE * 4, layerOrFill.width * TRACE_SCALE * 2]);
+        break;
+      case 'dotted':
+        ctx.setLineDash([0, layerOrFill.width * TRACE_SCALE * 2.5]);
+        break;
+      case 'dash-dot':
+        ctx.setLineDash([layerOrFill.width * TRACE_SCALE * 4, layerOrFill.width * TRACE_SCALE * 2,
+                          0, layerOrFill.width * TRACE_SCALE * 2.5]);
+        break;
+      case 'dash-double-dot':
+        ctx.setLineDash([layerOrFill.width * TRACE_SCALE * 4, layerOrFill.width * TRACE_SCALE * 1.5,
+                          0, layerOrFill.width * TRACE_SCALE * 1.5,
+                          0, layerOrFill.width * TRACE_SCALE * 1.5]);
+        break;
+      case 'long-dash':
+        ctx.setLineDash([layerOrFill.width * TRACE_SCALE * 10, layerOrFill.width * TRACE_SCALE * 3]);
+        break;
+      case 'short-dash':
+        ctx.setLineDash([layerOrFill.width * TRACE_SCALE * 1.5, layerOrFill.width * TRACE_SCALE * 1.5]);
+        break;
+      case 'outline-dot':
+        ctx.setLineDash([0, layerOrFill.width * TRACE_SCALE * 3.5]);
+        break;
+      case 'stripe':
+        ctx.setLineDash([layerOrFill.width * TRACE_SCALE * 1, layerOrFill.width * TRACE_SCALE * 3]);
+        break;
+      default:
+        ctx.setLineDash([]);
+    }
+    let xPos = textStartX;
+    chars.forEach((c, i) => {
+      ctx.strokeText(c, xPos, cy);
+      xPos += widths[i];
+    });
+  }
+
+  return { imageData: ctx.getImageData(0, 0, cw, ch), cw, ch };
+}
+
+// 判断是否为边界像素
+function isBoundary(grid, x, y, w, h) {
+  if (x <= 0 || x >= w - 1 || y <= 0 || y >= h - 1) return true;
+  const idx = y * w + x;
+  if (!grid[idx]) return false;
+  // 检查8邻域是否有空白像素
+  return grid[(y-1)*w + (x-1)] === 0 || grid[(y-1)*w + x] === 0 || grid[(y-1)*w + (x+1)] === 0 ||
+         grid[y*w + (x-1)] === 0 || grid[y*w + (x+1)] === 0 ||
+         grid[(y+1)*w + (x-1)] === 0 || grid[(y+1)*w + x] === 0 || grid[(y+1)*w + (x+1)] === 0;
+}
+
+// Moore 邻域追踪单个轮廓（标准8邻域边界追踪）
+function traceOneContour(grid, startX, startY, w, h, visited) {
+  // 8方向：顺时针 0=E,1=SE,2=S,3=SW,4=W,5=NW,6=N,7=NE
+  const dx = [1, 1, 0, -1, -1, -1, 0, 1];
+  const dy = [0, 1, 1, 1, 0, -1, -1, -1];
+
+  const points = [];
+  let x = startX, y = startY;
+
+  // 找到第一个非零邻居方向
+  let prevDir = 0;
+  for (let d = 0; d < 8; d++) {
+    const nx = x + dx[d], ny = y + dy[d];
+    if (nx >= 0 && nx < w && ny >= 0 && ny < h && grid[ny * w + nx]) {
+      prevDir = d;
+      break;
+    }
+  }
+
+  const maxIter = w * h * 2;
+  let iter = 0;
+  do {
+    points.push([x, y]);
+    visited[y * w + x] = 1;
+
+    // 从 prevDir 左后方开始顺时针搜索下一个边界像素
+    let found = false;
+    for (let k = 0; k < 8; k++) {
+      const sd = (prevDir + 5 + k) % 8; // +5 = 左转一格，然后顺时针
+      const nx = x + dx[sd], ny = y + dy[sd];
+      if (nx >= 0 && nx < w && ny >= 0 && ny < h && grid[ny * w + nx]) {
+        x = nx; y = ny;
+        prevDir = sd;
+        found = true;
+        break;
+      }
+    }
+    if (!found) break;
+    iter++;
+  } while ((x !== startX || y !== startY) && iter < maxIter);
+
+  return points;
+}
+
+// 从 ImageData 提取所有轮廓路径
+function traceImageToPaths(imageData) {
+  const { data, width: w, height: h } = imageData;
+  const grid = new Uint8Array(w * h);
+  for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+    grid[j] = data[i + 3] > TRACE_THRESHOLD ? 1 : 0;
+  }
+
+  const visited = new Uint8Array(w * h);
+  const allPaths = [];
+
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const idx = y * w + x;
+      if (grid[idx] && !visited[idx] && isBoundary(grid, x, y, w, h)) {
+        const pts = traceOneContour(grid, x, y, w, h, visited);
+        if (pts.length >= 5) allPaths.push(pts);
+      }
+    }
+  }
+
+  return allPaths;
+}
+
+// Ramer-Douglas-Peucker 简化
+function simplifyPath(points, epsilon) {
+  if (points.length < 3) return points;
+  const first = points[0], last = points[points.length - 1];
+  let maxD = 0, maxI = 0;
+  for (let i = 1; i < points.length - 1; i++) {
+    const d = perpendicularDist(points[i], first, last);
+    if (d > maxD) { maxD = d; maxI = i; }
+  }
+  if (maxD > epsilon) {
+    const left = simplifyPath(points.slice(0, maxI + 1), epsilon);
+    const right = simplifyPath(points.slice(maxI), epsilon);
+    return left.slice(0, -1).concat(right);
+  }
+  return [first, last];
+}
+
+function perpendicularDist(p, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  if (dx === 0 && dy === 0) return Math.hypot(p[0] - a[0], p[1] - a[1]);
+  const t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy);
+  const px = a[0] + t * dx, py = a[1] + t * dy;
+  return Math.hypot(p[0] - px, p[1] - py);
+}
+
+// 路径点数组转 SVG path d 属性字符串
+function pointsToD(points, scale) {
+  const s = scale || 1;
+  if (points.length < 2) return '';
+  let d = 'M ' + (points[0][0] / s).toFixed(2) + ' ' + (points[0][1] / s).toFixed(2);
+  for (let i = 1; i < points.length; i++) {
+    d += ' L ' + (points[i][0] / s).toFixed(2) + ' ' + (points[i][1] / s).toFixed(2);
+  }
+  d += ' Z';
+  return d;
+}
+
+// 构建 SVG 文档字符串（所有轮廓合并为单个 path 的多个子路径，确保 3D 软件正确识别孔洞）
+function buildPathSVG(paths, color, vbW, vbH) {
+  const allD = paths.map(p => pointsToD(simplifyPath(p, 1.5), TRACE_SCALE)).join(' ');
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${vbW} ${vbH}" width="${vbW}" height="${vbH}">
+  <path d="${allD}" fill="${color}" fill-rule="evenodd"/>
+</svg>`;
+}
+
+// 计算统一画布尺寸
+function calcSharedDims() {
+  const dims = measureText();
+  const maxW = state.layers.filter(l => l.visible).reduce((m, l) => Math.max(m, l.width), 0);
+  const scaled = state.fontSize * TRACE_SCALE;
+  const cw = Math.ceil(Math.max(dims.width, 50) * TRACE_SCALE + (maxW * TRACE_SCALE) * 2 + 40);
+  const ch = Math.ceil(scaled * 1.6);
+  return { cw, ch, cx: cw / 2, cy: ch / 2, maxW };
+}
+
+// 单文件（含全部图层）
+function buildSingleFileSVG() {
+  const dims = measureText();
+  const maxW = state.layers.filter(l => l.visible).reduce((m, l) => Math.max(m, l.width), 0);
+  const pad = maxW * 2 + 40;
+  const vbW = Math.ceil(dims.width + pad);
+  const vbH = Math.ceil(dims.height + pad);
+
+  const shared = calcSharedDims();
+
+  let groups = '';
+  const sorted = [...state.layers].filter(l => l.visible).sort((a, b) => b.width - a.width);
+
+  sorted.forEach((l, idx) => {
+    const { imageData } = renderTextToImageData(l, shared);
+    const paths = traceImageToPaths(imageData);
+    const allD = paths.map(p => pointsToD(simplifyPath(p, 1.5), TRACE_SCALE)).join(' ');
+    groups += `
+  <g id="layer-${idx + 1}" data-name="图层${idx + 1}" data-color="${l.color}" data-width="${l.width}" data-style="${l.style}">
+    <path d="${allD}" fill="${l.color}" fill-rule="evenodd"/>
+  </g>`;
+  });
+
+  let fillGroup = '';
+  if (state.fillVisible) {
+    const { imageData: fillID } = renderTextToImageData({ fillOnly: true }, shared);
+    const fillPaths = traceImageToPaths(fillID);
+    const fillD = fillPaths.map(p => pointsToD(simplifyPath(p, 1.5), TRACE_SCALE)).join(' ');
+    fillGroup = `
+  <g id="text-fill" data-name="文字填充">
+    <path d="${fillD}" fill="${state.fillColor}" fill-rule="evenodd"/>
+  </g>`;
+  }
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${vbW} ${vbH}" width="${vbW}" height="${vbH}">
+${groups}
+${fillGroup}
+</svg>`;
+}
+
+// 单个描边层 SVG
+function buildSingleLayerPathSVG(layer) {
+  const dims = measureText();
+  const pad = layer.width * 2 + 40;
+  const vbW = Math.ceil(dims.width + pad);
+  const vbH = Math.ceil(dims.height + pad);
+
+  const { imageData } = renderTextToImageData(layer);
+  const paths = traceImageToPaths(imageData);
+  return buildPathSVG(paths, layer.color, vbW, vbH);
+}
+
+// 文字填充 SVG
+function buildFillPathSVG() {
+  const dims = measureText();
+  const vbW = Math.ceil(dims.width + 40);
+  const vbH = Math.ceil(dims.height + 40);
+
+  const { imageData } = renderTextToImageData({ fillOnly: true });
+  const paths = traceImageToPaths(imageData);
+  return buildPathSVG(paths, state.fillColor, vbW, vbH);
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ======================== 导出入口 ========================
+async function exportSVG(mode) {
+  try {
+    if (mode === 'separate') {
+      const zip = new JSZip();
+      const visibleLayers = state.layers.filter(l => l.visible);
+
+      if (state.fillVisible) {
+        zip.file('文字填充.svg', buildFillPathSVG());
+      }
+
+      visibleLayers.forEach((l, i) => {
+        const name = '描边_' + (i + 1) + '_' + l.width + 'px_' +
+          ({ solid: '实线', dashed: '虚线', dotted: '点线', double: '双线', triple: '三线',
+             filled: '全覆盖', 'dash-dot': '点划线', 'dash-double-dot': '双点划线',
+             'long-dash': '长虚线', 'short-dash': '短虚线',
+             'outline-dot': '外框点线', stripe: '条纹虚线' })[l.style] + '.svg';
+        zip.file(name, buildSingleLayerPathSVG(l));
+      });
+
+      const blob = await zip.generateAsync({ type: 'blob' });
+      downloadBlob(blob, '文字描边_分层.zip');
+    } else {
+      const svgString = buildSingleFileSVG();
+      const blob = new Blob([svgString], { type: 'image/svg+xml' });
+      downloadBlob(blob, '文字描边.svg');
+    }
+  } catch (e) {
+    console.error('导出失败:', e);
+    alert('导出失败: ' + e.message);
+  }
+}
+
+// ======================== 图层 CRUD ========================
+function addLayer(defaults = {}) {
+  const layer = {
+    id: state.nextId++,
+    width: defaults.width ?? 6,
+    color: defaults.color ?? '#3B82F6',
+    style: defaults.style ?? 'filled',
+    visible: true,
+  };
+  state.layers.push(layer);
+  renderLayerList();
+  updatePreview();
+}
+
+function removeLayer(id) {
+  state.layers = state.layers.filter(l => l.id !== id);
+  if (state.expandedColorPicker === id) state.expandedColorPicker = null;
+  renderLayerList();
+  updatePreview();
+}
+
+function updateLayer(id, props) {
+  const layer = state.layers.find(l => l.id === id);
+  if (layer) { Object.assign(layer, props); updatePreview(); }
+}
+
+function moveLayer(id, dir) {
+  const idx = state.layers.findIndex(l => l.id === id);
+  if (idx === -1) return;
+  const ni = idx + dir;
+  if (ni < 0 || ni >= state.layers.length) return;
+  [state.layers[idx], state.layers[ni]] = [state.layers[ni], state.layers[idx]];
+  renderLayerList();
+  updatePreview();
+}
+
+function toggleLayerVisibility(id) {
+  const layer = state.layers.find(l => l.id === id);
+  if (layer) { layer.visible = !layer.visible; renderLayerList(); updatePreview(); }
+}
+
+// ======================== 渲染图层列表 ========================
+function renderLayerList() {
+  layerList.innerHTML = state.layers.map((layer, idx) => {
+    const swatches = PRESET_COLORS.map(c => {
+      const active = layer.color.toUpperCase() === c.hex.toUpperCase();
+      return `<div class="color-swatch${c.name==='白'?' white':''}${active?' active':''}"
+        style="background:${c.hex}" title="${c.name}" data-color="${c.hex}" data-layer="${layer.id}"></div>`;
+    }).join('');
+    const expanded = state.expandedColorPicker === layer.id;
+
+    return `
+    <div class="layer-card p-3" data-layer="${layer.id}">
+      <div class="flex items-center justify-between mb-2">
+        <div class="flex items-center gap-2">
+          <span class="drag-handle text-gray-300 btn" data-layer="${layer.id}" title="拖拽排序"><i class="fa fa-bars"></i></span>
+          <span class="text-xs font-semibold text-gray-600">图层 ${idx + 1}</span>
+          <span class="text-[10px] text-gray-400">${STROKE_STYLES.find(s=>s.value===layer.style)?.label??''}</span>
+        </div>
+        <div class="flex items-center gap-1">
+          <button class="btn w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-blue-500"
+            data-action="moveUp" data-layer="${layer.id}" title="上移"><i class="fa fa-chevron-up text-[10px]"></i></button>
+          <button class="btn w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-blue-500"
+            data-action="moveDown" data-layer="${layer.id}" title="下移"><i class="fa fa-chevron-down text-[10px]"></i></button>
+          <button class="btn w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-gray-600"
+            data-action="toggleVis" data-layer="${layer.id}" title="${layer.visible?'隐藏':'显示'}">
+            <i class="fa fa-${layer.visible?'eye':'eye-slash'} text-[10px]"></i></button>
+          <button class="btn w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-red-500"
+            data-action="remove" data-layer="${layer.id}" title="删除"><i class="fa fa-trash-o text-[10px]"></i></button>
+        </div>
+      </div>
+      <div class="flex items-center gap-1.5 mb-2 flex-wrap">
+        ${swatches}
+        <div class="color-swatch flex items-center justify-center bg-white ${expanded?'active':''}"
+             style="border:2px dashed ${expanded?'#1f2937':'#d1d5db'}" title="自定义颜色"
+             data-action="togglePicker" data-layer="${layer.id}">
+          <i class="fa fa-plus text-[10px] text-gray-400"></i></div>
+        ${expanded ? `
+        <div class="flex items-center gap-1 ml-1">
+          <input type="color" value="${layer.color}" data-action="customColor" data-layer="${layer.id}" class="w-6 h-6 rounded cursor-pointer border p-0">
+          <button class="btn text-[10px] text-gray-400 hover:text-gray-600" data-action="closePicker" data-layer="${layer.id}"><i class="fa fa-times"></i></button>
+        </div>` : ''}
+      </div>
+      <div class="flex items-center gap-2 mb-2">
+        <span class="text-[10px] text-gray-400 w-6">宽度</span>
+        <input type="range" min="1" max="60" value="${layer.width}" data-action="widthSlider" data-layer="${layer.id}" class="flex-1">
+        <input type="number" value="${layer.width}" min="1" max="60" step="1"
+          data-action="widthNum" data-layer="${layer.id}"
+          class="spin-input w-12 text-center border border-gray-200 rounded py-0.5 text-xs font-mono text-gray-700 focus:ring-1 focus:ring-blue-400">
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="text-[10px] text-gray-400 w-6">样式</span>
+        <select data-action="style" data-layer="${layer.id}" class="flex-1 border border-gray-200 rounded-md px-2 py-1 text-xs text-gray-700 bg-white focus:ring-1 focus:ring-blue-400">
+          ${STROKE_STYLES.map(s => `<option value="${s.value}" ${layer.style===s.value?'selected':''}>${s.label}</option>`).join('')}
+        </select>
+      </div>
+    </div>`;
+  }).join('');
+
+  bindLayerEvents();
+}
+
+// ======================== 图层事件绑定 ========================
+function bindLayerEvents() {
+  // 点击事件委托
+  layerList.querySelectorAll('[data-action]').forEach(el => {
+    el.addEventListener('click', function(e) {
+      e.stopPropagation();
+      const lid = parseInt(this.dataset.layer);
+      switch (this.dataset.action) {
+        case 'moveUp': saveState(); moveLayer(lid, -1); break;
+        case 'moveDown': saveState(); moveLayer(lid, 1); break;
+        case 'toggleVis': saveState(); toggleLayerVisibility(lid); break;
+        case 'remove': saveState(); removeLayer(lid); break;
+        case 'togglePicker':
+          state.expandedColorPicker = state.expandedColorPicker === lid ? null : lid;
+          renderLayerList();
+          break;
+        case 'closePicker':
+          state.expandedColorPicker = null;
+          renderLayerList();
+          break;
+      }
+    });
+  });
+
+  // 颜色色块
+  layerList.querySelectorAll('.color-swatch[data-color]').forEach(sw => {
+    sw.addEventListener('click', function(e) {
+      e.stopPropagation();
+      saveState();
+      const lid = parseInt(this.dataset.layer);
+      updateLayer(lid, { color: this.dataset.color });
+      state.expandedColorPicker = null;
+      renderLayerList();
+    });
+  });
+
+  // 自定义颜色
+  layerList.querySelectorAll('input[type="color"]').forEach(inp => {
+    inp.addEventListener('input', function() {
+      updateLayer(parseInt(this.dataset.layer), { color: this.value });
+    });
+    inp.addEventListener('mousedown', () => saveState());
+  });
+
+  // 宽度滑块
+  layerList.querySelectorAll('input[type="range"]').forEach(sl => {
+    sl.addEventListener('input', function() {
+      const lid = parseInt(this.dataset.layer);
+      const w = parseInt(this.value);
+      updateLayer(lid, { width: w });
+      const numInput = this.parentElement.querySelector('input[type="number"]');
+      if (numInput) numInput.value = w;
+    });
+    sl.addEventListener('mousedown', () => saveState());
+  });
+
+  // 宽度数字输入
+  layerList.querySelectorAll('input[type="number"]').forEach(inp => {
+    inp.addEventListener('change', function() {
+      saveState();
+      const lid = parseInt(this.dataset.layer);
+      let w = parseInt(this.value);
+      if (isNaN(w) || w < 1) w = 1;
+      if (w > 60) w = 60;
+      this.value = w;
+      updateLayer(lid, { width: w });
+      const slider = this.parentElement.querySelector('input[type="range"]');
+      if (slider) slider.value = w;
+    });
+  });
+
+  // 样式选择
+  layerList.querySelectorAll('select').forEach(sel => {
+    sel.addEventListener('change', function() {
+      saveState();
+      updateLayer(parseInt(this.dataset.layer), { style: this.value });
+    });
+  });
+
+  // 拖拽排序 — 仅拖拽手柄触发
+  layerList.querySelectorAll('.drag-handle').forEach(handle => {
+    handle.addEventListener('mousedown', function(e) {
+      const card = this.closest('.layer-card');
+      if (!card) return;
+      card.draggable = true;
+      // 在下一个事件循环中，浏览器会开始拖拽
+    });
+    handle.addEventListener('dragstart', function(e) {
+      const card = this.closest('.layer-card');
+      if (!card) return;
+      dragSrcId = parseInt(card.dataset.layer);
+      card.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', dragSrcId);
+    });
+    handle.addEventListener('dragend', function(e) {
+      const card = this.closest('.layer-card');
+      if (card) { card.classList.remove('dragging'); card.draggable = false; }
+      layerList.querySelectorAll('.layer-card').forEach(c => c.classList.remove('drag-over'));
+    });
+  });
+
+  // 拖放目标
+  layerList.querySelectorAll('.layer-card').forEach(card => {
+    card.addEventListener('dragover', function(e) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      this.classList.add('drag-over');
+    });
+    card.addEventListener('dragleave', function() { this.classList.remove('drag-over'); });
+    card.addEventListener('drop', function(e) {
+      e.preventDefault();
+      this.classList.remove('drag-over');
+      if (dragSrcId == null) return;
+      const targetId = parseInt(this.dataset.layer);
+      if (dragSrcId === targetId) return;
+      saveState();
+      const si = state.layers.findIndex(l => l.id === dragSrcId);
+      const ti = state.layers.findIndex(l => l.id === targetId);
+      if (si === -1 || ti === -1) return;
+      const [m] = state.layers.splice(si, 1);
+      state.layers.splice(ti, 0, m);
+      dragSrcId = null;
+      renderLayerList();
+      updatePreview();
+    });
+  });
+}
+
+let dragSrcId = null;
+
+// ======================== 预览区缩放与拖拽 ========================
+let isDragging = false, dragStartX = 0, dragStartY = 0, panStartX = 0, panStartY = 0;
+
+previewContainer.addEventListener('mousedown', (e) => {
+  if (e.target.closest('button') || e.target.closest('select')) return;
+  isDragging = true;
+  dragStartX = e.clientX; dragStartY = e.clientY;
+  panStartX = state.panX; panStartY = state.panY;
+  previewContainer.style.cursor = 'grabbing';
+  hintText.style.display = 'none';
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (!isDragging) return;
+  state.panX = panStartX + e.clientX - dragStartX;
+  state.panY = panStartY + e.clientY - dragStartY;
+  applyTransform();
+});
+
+window.addEventListener('mouseup', () => {
+  if (isDragging) { isDragging = false; previewContainer.style.cursor = ''; }
+});
+
+previewContainer.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const rect = previewContainer.getBoundingClientRect();
+  const cx = e.clientX - rect.left;
+  const cy = e.clientY - rect.top;
+  const delta = -e.deltaY;
+  const factor = delta > 0 ? 1.08 : 1 / 1.08;
+  const newZoom = Math.min(10, Math.max(0.1, state.zoom * factor));
+  state.panX = cx - (cx - state.panX) * (newZoom / state.zoom);
+  state.panY = cy - (cy - state.panY) * (newZoom / state.zoom);
+  state.zoom = newZoom;
+  applyTransform();
+  hintText.style.display = 'none';
+}, { passive: false });
+
+// 触摸支持
+let touchStartDist = 0, touchStartZoom = 1, touchStartPanX = 0, touchStartPanY = 0, touchCX = 0, touchCY = 0;
+
+previewContainer.addEventListener('touchstart', (e) => {
+  if (e.touches.length === 1) {
+    isDragging = true;
+    dragStartX = e.touches[0].clientX; dragStartY = e.touches[0].clientY;
+    panStartX = state.panX; panStartY = state.panY;
+  } else if (e.touches.length === 2) {
+    isDragging = false;
+    const dx = e.touches[0].clientX - e.touches[1].clientX;
+    const dy = e.touches[0].clientY - e.touches[1].clientY;
+    touchStartDist = Math.sqrt(dx * dx + dy * dy);
+    touchStartZoom = state.zoom;
+    touchCX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+    touchCY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+    touchStartPanX = state.panX; touchStartPanY = state.panY;
+  }
+  hintText.style.display = 'none';
+}, { passive: false });
+
+previewContainer.addEventListener('touchmove', (e) => {
+  e.preventDefault();
+  if (e.touches.length === 1 && isDragging) {
+    state.panX = panStartX + e.touches[0].clientX - dragStartX;
+    state.panY = panStartY + e.touches[0].clientY - dragStartY;
+    applyTransform();
+  } else if (e.touches.length === 2) {
+    const dx = e.touches[0].clientX - e.touches[1].clientX;
+    const dy = e.touches[0].clientY - e.touches[1].clientY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const newZoom = Math.min(10, Math.max(0.1, touchStartZoom * (dist / touchStartDist)));
+    const rect = previewContainer.getBoundingClientRect();
+    const cx = touchCX - rect.left;
+    const cy = touchCY - rect.top;
+    state.zoom = newZoom;
+    state.panX = cx - (cx - touchStartPanX) * (newZoom / touchStartZoom);
+    state.panY = cy - (cy - touchStartPanY) * (newZoom / touchStartZoom);
+    applyTransform();
+  }
+}, { passive: false });
+
+// ======================== 缩放控件 ========================
+function zoomAtCenter(factor) {
+  const rect = previewContainer.getBoundingClientRect();
+  const cx = rect.width / 2, cy = rect.height / 2;
+  const newZoom = Math.min(10, Math.max(0.1, state.zoom * factor));
+  state.panX = cx - (cx - state.panX) * (newZoom / state.zoom);
+  state.panY = cy - (cy - state.panY) * (newZoom / state.zoom);
+  state.zoom = newZoom;
+  applyTransform();
+}
+
+$('#zoomIn').addEventListener('click', () => zoomAtCenter(1.25));
+$('#zoomOut').addEventListener('click', () => zoomAtCenter(1 / 1.25));
+$('#zoomReset').addEventListener('click', () => {
+  state.zoom = 1; state.panX = 0; state.panY = 0;
+  applyTransform();
+  fitPreviewToContainer();
+});
+$('#zoomFit').addEventListener('click', () => fitPreviewToContainer());
+
+function fitPreviewToContainer() {
+  const cw = previewContainer.clientWidth;
+  const ch = previewContainer.clientHeight;
+  const sw = parseFloat(previewSvg.getAttribute('width')) || 800;
+  const sh = parseFloat(previewSvg.getAttribute('height')) || 400;
+  const s = Math.min((cw * 0.85) / sw, (ch * 0.85) / sh, 1.5);
+  state.zoom = Math.max(0.1, s);
+  state.panX = (cw - sw * state.zoom) / 2;
+  state.panY = (ch - sh * state.zoom) / 2;
+  applyTransform();
+}
+
+// ======================== 侧栏宽度拖拽调节 ========================
+(function() {
+  const sidebar = document.getElementById('sidebar');
+  const handle = document.getElementById('resizeHandle');
+  if (!sidebar || !handle) return;
+  let isResizing = false;
+  handle.addEventListener('mousedown', (e) => {
+    isResizing = true;
+    e.preventDefault();
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!isResizing) return;
+    const w = Math.min(800, Math.max(260, e.clientX));
+    sidebar.style.width = w + 'px';
+  });
+  window.addEventListener('mouseup', () => {
+    if (!isResizing) return;
+    isResizing = false;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  });
+})();
+
+// ======================== 导出按钮 ========================
+$('#exportBtn').addEventListener('click', () => exportSVG('single'));
+
+// ======================== 文字/字体/填充事件 ========================
+textInput.addEventListener('input', () => {
+  saveState();
+  state.text = textInput.value || ' ';
+  updatePreview();
+});
+
+fontFamilySel.addEventListener('change', () => {
+  saveState();
+  state.fontFamily = fontFamilySel.value;
+  updatePreview();
+  // 后台预加载字体数据
+});
+
+// ======================== 字体组合框（搜索+选择） ========================
+let allFontOptions = [];
+let isComboboxOpen = false;
+
+function syncFontOptions() {
+  allFontOptions = Array.from(fontFamilySel.options).map(o => ({ value: o.value, text: o.text }));
+  const selected = allFontOptions.find(o => o.value === fontFamilySel.value);
+  if (selected) fontComboboxInput.value = selected.text;
+}
+
+function renderCombobox(filterText) {
+  const lower = (filterText || '').toLowerCase();
+  const filtered = lower
+    ? allFontOptions.filter(o => o.text.toLowerCase().includes(lower) || o.value.toLowerCase().includes(lower))
+    : allFontOptions;
+
+  if (filtered.length === 0) {
+    fontComboboxDropdown.innerHTML = '<div class="px-3 py-2 text-xs text-gray-400">无匹配字体</div>';
+    return;
+  }
+
+  fontComboboxDropdown.innerHTML = filtered.map(o =>
+    `<div class="font-option px-3 py-1.5 text-sm text-gray-700 hover:bg-blue-50 cursor-pointer" data-value="${o.value.replace(/"/g,'&quot;')}">${escXml(o.text)}</div>`
+  ).join('');
+
+  fontComboboxDropdown.querySelectorAll('.font-option').forEach(el => {
+    el.addEventListener('click', function() {
+      fontFamilySel.value = this.dataset.value;
+      fontFamilySel.dispatchEvent(new Event('change'));
+      fontComboboxInput.value = this.textContent;
+      closeCombobox();
+    });
+  });
+}
+
+function openCombobox() {
+  isComboboxOpen = true;
+  fontComboboxDropdown.classList.remove('hidden');
+  renderCombobox(''); // 打开时显示全部字体
+}
+
+function closeCombobox() {
+  isComboboxOpen = false;
+  fontComboboxDropdown.classList.add('hidden');
+  const selected = allFontOptions.find(o => o.value === fontFamilySel.value);
+  if (selected) fontComboboxInput.value = selected.text;
+}
+
+// 组合框交互事件
+fontComboboxInput.addEventListener('click', function() {
+  if (isComboboxOpen) closeCombobox(); else openCombobox();
+});
+fontComboboxInput.addEventListener('input', function() {
+  if (!isComboboxOpen) openCombobox();
+  renderCombobox(this.value);
+});
+
+// 键盘导航
+fontComboboxInput.addEventListener('keydown', function(e) {
+  if (!isComboboxOpen) {
+    if (e.key === 'ArrowDown' || e.key === 'Enter') {
+      e.preventDefault();
+      openCombobox();
+    }
+    return;
+  }
+  const options = fontComboboxDropdown.querySelectorAll('.font-option');
+  if (options.length === 0) return;
+  let idx = Array.from(options).findIndex(o => o.classList.contains('bg-blue-100'));
+  switch (e.key) {
+    case 'ArrowDown': e.preventDefault(); idx = Math.min(idx + 1, options.length - 1); break;
+    case 'ArrowUp': e.preventDefault(); idx = Math.max(idx - 1, 0); break;
+    case 'Enter':
+      e.preventDefault();
+      if (idx >= 0) options[idx].click();
+      return;
+    case 'Escape': e.preventDefault(); closeCombobox(); return;
+    default: return;
+  }
+  options.forEach(o => o.classList.remove('bg-blue-100'));
+  if (options[idx]) {
+    options[idx].classList.add('bg-blue-100');
+    options[idx].scrollIntoView({ block: 'nearest' });
+  }
+});
+
+// 点击外部关闭下拉
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('#fontCombobox') && isComboboxOpen) closeCombobox();
+});
+
+function updateFillVisButton() {
+  const btn = $('#toggleFillVis');
+  if (btn) {
+    btn.innerHTML = `<i class="fa fa-${state.fillVisible ? 'eye' : 'eye-slash'} text-[10px]"></i>`;
+    btn.title = state.fillVisible ? '隐藏填充层' : '显示填充层';
+  }
+}
+
+function toggleFillVisibility() {
+  state.fillVisible = !state.fillVisible;
+  updateFillVisButton();
+  updatePreview();
+}
+
+// 填充色选择
+function setFillColor(color) {
+  state.fillColor = color;
+  fillColor.value = color;
+  // 更新色块激活状态
+  document.querySelectorAll('#fillColorPicker .color-swatch').forEach(sw => {
+    sw.classList.toggle('active', sw.dataset.fillColor.toUpperCase() === color.toUpperCase());
+  });
+  updatePreview();
+}
+
+document.querySelectorAll('#fillColorPicker .color-swatch').forEach(sw => {
+  sw.addEventListener('click', () => {
+    saveState();
+    setFillColor(sw.dataset.fillColor);
+  });
+});
+
+fillColor.addEventListener('input', () => {
+  setFillColor(fillColor.value);
+});
+fillColor.addEventListener('mousedown', () => saveState());
+
+$('#toggleFillVis').addEventListener('click', () => {
+  saveState();
+  toggleFillVisibility();
+});
+
+// ======================== 字号事件 ========================
+function setFontSize(v) {
+  state.fontSize = v;
+  fontSizeSlider.value = v;
+  fontSizeNum.value = v;
+  updatePreview();
+}
+
+fontSizeSlider.addEventListener('input', () => {
+  const v = parseInt(fontSizeSlider.value);
+  state.fontSize = v;
+  fontSizeNum.value = v;
+  updatePreview();
+});
+fontSizeSlider.addEventListener('mousedown', () => saveState());
+
+fontSizeNum.addEventListener('change', () => {
+  saveState();
+  let v = parseInt(fontSizeNum.value);
+  if (isNaN(v) || v < 10) v = 10;
+  if (v > 300) v = 300;
+  setFontSize(v);
+});
+
+$('#fontSizeDown').addEventListener('click', () => {
+  saveState();
+  setFontSize(Math.max(10, state.fontSize - 5));
+});
+$('#fontSizeUp').addEventListener('click', () => {
+  saveState();
+  setFontSize(Math.min(300, state.fontSize + 5));
+});
+
+document.querySelectorAll('.fontSizePreset').forEach(btn => {
+  btn.addEventListener('click', () => {
+    saveState();
+    setFontSize(parseInt(btn.dataset.size));
+  });
+});
+
+// ======================== 添加图层按钮 ========================
+$('#addLayer').addEventListener('click', () => { saveState(); addLayer(); });
+
+// ======================== 本机字体检测 ========================
+$('#loadLocalFonts').addEventListener('click', async function() {
+  saveState();
+  const btn = this;
+  btn.innerHTML = '<i class="fa fa-spinner fa-spin mr-1"></i>检测中...';
+  btn.disabled = true;
+
+  try {
+    const fonts = await getDetectedFonts();
+    if (fonts.length === 0) throw new Error('未检测到字体');
+
+    const families = [...new Set(fonts.map(f => f.family))].sort();
+    const fontMap = new Map();
+    fonts.forEach(f => { if (!fontMap.has(f.family)) fontMap.set(f.family, getFontDisplayName(f.family, f.fullName)); });
+    const current = fontFamilySel.value;
+    fontFamilySel.innerHTML = families.map(f =>
+      `<option value="${f.replace(/"/g,'&quot;')}" ${f === current ? 'selected' : ''}>${fontMap.get(f)}</option>`
+    ).join('');
+    state.fontFamily = fontFamilySel.value;
+    updatePreview();
+    syncFontOptions();
+
+    btn.innerHTML = '<i class="fa fa-check mr-1"></i>已检测 ' + families.length + ' 款字体就绪';
+    btn.classList.add('text-green-500');
+    setTimeout(() => {
+      btn.innerHTML = '<i class="fa fa-refresh mr-1"></i>检测本机字体';
+      btn.classList.remove('text-green-500');
+      btn.disabled = false;
+    }, 3000);
+  } catch (e) {
+    btn.innerHTML = '<i class="fa fa-warning mr-1"></i>浏览器不支持，导出将用文本元素';
+    btn.classList.add('text-amber-500');
+    setTimeout(() => {
+      btn.innerHTML = '<i class="fa fa-refresh mr-1"></i>检测本机字体';
+      btn.classList.remove('text-amber-500');
+      btn.disabled = false;
+    }, 3000);
+  }
+});
+
+// ======================== 键盘快捷键 ========================
+window.addEventListener('keydown', (e) => {
+  // Ctrl+Z 全局撤销（优先于 input 守卫）
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+    e.preventDefault();
+    undo();
+    return;
+  }
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+  switch (e.key) {
+    case '0': state.zoom = 1; state.panX = 0; state.panY = 0; applyTransform(); fitPreviewToContainer(); break;
+    case '=': case '+': $('#zoomIn').click(); break;
+    case '-': $('#zoomOut').click(); break;
+    case 'f': fitPreviewToContainer(); break;
+  }
+});
+
+// ======================== 初始化 ========================
+function init() {
+  // 同步填充色初始状态
+  setFillColor(state.fillColor);
+  updateFillVisButton();
+  // 默认图层
+  addLayer({ width: 25, color: '#EF4444', style: 'filled' });
+  addLayer({ width: 10, color: '#FFFFFF', style: 'solid' });
+  renderLayerList();
+  updatePreview();
+  syncFontOptions();
+
+  // 首次用户交互时自动后台检测本机字体（queryLocalFonts 需用户手势）
+  let autoDetected = false;
+  document.addEventListener('click', async function autoDetect() {
+    if (autoDetected) return;
+    autoDetected = true;
+    try {
+      const fonts = await getDetectedFonts();
+      if (fonts.length > 0) {
+        const families = [...new Set(fonts.map(f => f.family))].sort();
+        const fontMap = new Map();
+        fonts.forEach(f => { if (!fontMap.has(f.family)) fontMap.set(f.family, getFontDisplayName(f.family, f.fullName)); });
+        const current = fontFamilySel.value;
+        fontFamilySel.innerHTML = families.map(f =>
+          `<option value="${f.replace(/"/g, '&quot;')}" ${f === current ? 'selected' : ''}>${fontMap.get(f)}</option>`
+        ).join('');
+        state.fontFamily = fontFamilySel.value;
+        syncFontOptions();
+        // 后台预加载
+        console.log('后台自动检测完成:', families.length, '款字体');
+      }
+    } catch (e) { /* 静默 */ }
+  }, { once: false });
+
+  // 立即适应一次，确保 SVG 尺寸已就绪
+  fitPreviewToContainer();
+  // 等一帧后再次适应，确保布局稳定
+  requestAnimationFrame(() => fitPreviewToContainer());
+  // 再兜底一次（某些浏览器下 rAF 时机可能偏早）
+  setTimeout(() => fitPreviewToContainer(), 80);
+}
+
+init();
+</script>
+</body>
+</html>
